@@ -1,0 +1,52 @@
+switch 245: initiate for number in 0-1
+switch 246: initiate for number in 0-3
+switch 247: initiate for number in 0-7
+switch 248: initiate for number in 0-15
+switch 249: initiate for number in 0-31
+switch 250: is setting mineral count
+switch 251-255: counter bits
+
+switch 1: create units
+switch 2: send units to battlefield when ready
+
+for all inits: check 250 & specific (245-249) generator switch clear
+
+switch 50: get player 1 composition number
+switch 51: check player 1 composition number, set 'start making' switches
+switch 52: making player 1 units
+switch 53: get player 2 composition number
+switch 54: check player 2 composition number, set 'start making' switches
+switch 55: making player 2 units
+switch 56: units ready to teleport
+
+60-69 work like a super-counter, we go down the line; no making
+hydras until 'start making lings', 'making lings' bit as well as 249 & 250 are all zero, etc.
+
+switch 60: start making lings
+switch 61: making lings
+switch 62: start making hydra
+switch 63: making hydra
+switch 64: start making lurker
+switch 65: making lurker
+switch 66: start making ultra
+switch 67: making ultra
+switch 68: start making defiler
+switch 69: making defiler
+
+switch 70: start making marines
+switch 71: making marines
+switch 72: start making medics
+switch 73: making medics
+switch 74: start making firebats
+switch 75: making firebats
+switch 76: start making vultures
+switch 77: making vultures
+switch 78: start making tanks
+switch 79: making tanks
+switch 80: start making goliaths
+switch 81: making goliaths
+switch 82: start making sci vessels
+switch 83: making sci vessels
+
+
+
