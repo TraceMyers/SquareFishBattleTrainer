@@ -3,6 +3,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from random import randint, sample as randsample, choice
 from load import load_entities, load_map
+from math import ceil
+from sympy import primerange
 
 
 # object shared for caching 
@@ -229,7 +231,7 @@ def test_positional_encoding_array(test_type='visual', depth=256, width=8192, he
 # 8: position x     (set aside for positional encoding)
 # 9: position y     (set aside for positional encoding)   
 
-def preprocessed_entities(entities):
+def preprocessed_entities(entities, nn_width):
     n = entities.shape[0]
     positions = entities[:, _cache.entity_col_ct-2:]
     entities = entities[:, 0:_cache.entity_col_ct-2]
@@ -248,8 +250,62 @@ def preprocessed_entities(entities):
                 continue
             spacing = _cache.one_hot_spacing_cumulative[j]
             preprocessed[i, spacing + entity_val] = 1
-    return preprocessed, positional_encoding_array(positions, _cache.preprocessed_entity_col_ct, 8192, 8192)
+    return preprocessed, positional_encoding_array(positions, nn_width, 8192, 8192)
 
+
+"""
+An attempt at creating my own static embedding using prime numbers to ensure
+uniqueness for each entity permutation. Appears to work alright!
+"""
+def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=False):
+    in_cols = preprocessed_entities.shape[1]
+    n = preprocessed_entities.shape[0]
+    step_size = ceil(in_cols / encoder_layer_sz)
+    init_step_size = step_size
+    # TODO: pickle
+    primes = np.array(list(primerange(0, 10000))[1:in_cols+1])
+    embedded_entities = np.zeros((n, encoder_layer_sz))
+
+    min_prime = primes[0]
+    div_val = 1/(min_prime*0.9)
+
+    i = 0
+    j = 0
+    remaining_embedded_cols = encoder_layer_sz
+    remaining_preprocessed_cols = in_cols
+    while True:
+        if i >= in_cols:
+            break
+        if step_size > 1:
+            captured_vals = preprocessed_entities[:,i:i+step_size] * primes[i:i+step_size] * div_val
+            embedded_entities[:,j] = np.prod(captured_vals, axis=1, where=(captured_vals > 0))
+            if remaining_embedded_cols * (step_size-1) >= remaining_preprocessed_cols:
+                step_size -= 1
+        else:
+            embedded_entities[:,j] = preprocessed_entities[:,i] * primes[i]
+        i += step_size
+        j += 1
+        remaining_embedded_cols -= 1
+        remaining_preprocessed_cols -= step_size
+    embedded_entities = np.log(embedded_entities, where=(embedded_entities>0))
+    embedded_max = np.log(np.prod(primes[-init_step_size:]))
+    embedded_entities /= embedded_max
+
+    if show_plots:
+        flattened = embedded_entities.flatten()
+        plt.title('embedded')
+        plt.hist(flattened, bins=50)
+        plt.show()
+        plt.title('preprocessed')
+        plt.imshow(preprocessed_entities, cmap='plasma')
+        plt.show()
+        plt.title('embedded')
+        plt.imshow(embedded_entities, cmap='plasma')
+        plt.show()
+
+    return embedded_entities
+
+    
 
 def stats(item):
     if item == 'entity_permutation_ct':
