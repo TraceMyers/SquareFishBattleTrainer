@@ -224,7 +224,7 @@ def preprocess_entities(entities, nn_width=256):
                 continue
             spacing = _cache.one_hot_spacing_cumulative[j]
             preprocessed[i, spacing + entity_val] = 1
-    return preprocessed, positional_encoding_array(positions, nn_width, 8192, 8192)
+    return preprocessed, positional_encoding_array(positions, nn_width, 8192, 8192), positions
 
 
 """
@@ -284,14 +284,16 @@ def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=Fals
 # ------------------------------------------------------------------------------------------ Map ---#
 # --------------------------------------------------------------------------------------------------#
 
+
 """
 Squares the map by adding borders and scales it to be ready for the spatial encoder.
 """
-def preprocess_map(_map, scale_to_dim=128, show_plots=False):
+def preprocess_map(_map, spatial_entity_encodings, entity_positions, scale_to_dim=128, show_plots=False):
     map_depth = _map.shape[0]
     map_height = _map.shape[1]
     map_width = _map.shape[2]
     prescale_map_dim = map_height if map_height > map_width else map_width
+    entity_tilepositions = entity_positions // 32
 
     # If the dimensions are unequal, make the map square by adding borders before scaling to make
     # normal distance measures true. I don't know if this is important but it seems reasonable.

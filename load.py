@@ -14,7 +14,7 @@ MAP_TILES = MAP_WIDTH * MAP_HEIGHT
 MAP_DEPTH = 4
 MAP_BYTES = MAP_TILES * MAP_DEPTH
 
-
+# TODO: subtract min x and min y from positions
 def load_entities():
     entity_file_path = 'data/entities.bin'
     file_size = stat(entity_file_path).st_size

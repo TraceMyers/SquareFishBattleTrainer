@@ -54,7 +54,7 @@ class EntityEncoder(nn.Module):
             nn.ReLU()
         )
         self.spatial_entity_encodings = nn.Sequential(
-            nn.Conv1d(1, 1, self.atten_dim//16, self.atten_dim//16),
+            nn.Conv1d(1, 1, self.atten_dim//8, self.atten_dim//8),
             nn.ReLU()
         )
         self.encoded_entities = nn.Sequential(
@@ -90,13 +90,14 @@ class EntityEncoder(nn.Module):
             # Skip connection
             step_input = self.layer_norm(roll_out + step_input)
 
-        transformer_output = step_input
-        entity_encodings = self.entity_encodings(transformer_output.transpose(0, 1)).transpose(0, 1)
-        entenc_cnn_prep = entity_encodings.view(-1, n, self.atten_dim).transpose(0, 1)
+        transformer_output = step_input[None, :, :]
+        entity_encodings = self.entity_encodings(transformer_output.transpose(2, 1)).transpose(2, 1)
+        entenc_cnn_prep = entity_encodings.transpose(0, 1)
         spatial_entity_encodings = self.spatial_entity_encodings(entenc_cnn_prep).squeeze()
         encoded_entities = self.encoded_entities(tmean(entity_encodings, 0))
+        print(entity_encodings.size(), spatial_entity_encodings.size(), encoded_entities.size())
 
-        return entity_encodings, spatial_entity_encodings, encoded_entities
+        return entity_encodings.squeeze(), spatial_entity_encodings, encoded_entities
 
 
 class SpatialEncoder(nn.Module):
