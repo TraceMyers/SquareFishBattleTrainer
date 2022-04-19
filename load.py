@@ -15,7 +15,6 @@ MAP_DEPTH = 4
 MAP_BYTES = MAP_TILES * MAP_DEPTH
 
 
-# TODO: add bias column
 def load_entities():
     entity_file_path = 'data/entities.bin'
     file_size = stat(entity_file_path).st_size
@@ -42,7 +41,9 @@ def load_map(visualize=False):
     format_str = f'<{int(file_size)}B' 
     unpacked_map = unpack(format_str, file_bytes)
     map_layers = [
-        np.array(unpacked_map[i*MAP_TILES:(i*MAP_TILES)+MAP_TILES]).reshape((MAP_HEIGHT, MAP_WIDTH), order='F')
+        np.array(unpacked_map[
+            i*MAP_TILES:(i*MAP_TILES)+MAP_TILES
+        ]).reshape((MAP_HEIGHT, MAP_WIDTH), order='F')
         for i in range(MAP_DEPTH)
     ]
     if visualize:

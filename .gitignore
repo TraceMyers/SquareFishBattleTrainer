@@ -1,4 +1,3 @@
-_pycache_/
-data/
+__pycache__/
 Triggers.trg
-abattetrain_comments.txt
+abattletrain_comments.txt

@@ -5,64 +5,21 @@ from random import randint, sample as randsample, choice
 from load import load_entities, load_map
 from math import ceil
 from sympy import primerange
+from pickle import load as pload, dump as pdump
+import cv2
 
 
-# object shared for caching 
-_cache = None
+# --------------------------------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------------- Entities ---#
+# --------------------------------------------------------------------------------------------------#
 
 
 """
-pem = positional encoding memory
-"""
-class Cache:
-    
-    def __init__(self):
-        self.pem_init()
-        self.entity_stats_init()
-        
-    def pem_init(self):
-        self.pem_len = 10000
-        self.pem_queue = [
-            (-i, -i) for i in range(1, self.pem_len+1)
-        ]
-        self.pem = dict(zip(
-            self.pem_queue, 
-            [None for i in range(self.pem_len)]
-        ))
-        self.pem_queue_ptr = 0
-
-    def pem_cached(self, xy):
-        try:
-            return self.pem[xy]
-        except:
-            return None
-
-    def pem_add(self, xy, vec):
-        key = self.pem_queue[self.pem_queue_ptr]
-        self.pem.pop(key)
-        self.pem_queue[self.pem_queue_ptr] = xy
-        self.pem[xy] = vec
-        self.pem_queue_ptr += 1
-        if self.pem_queue_ptr >= self.pem_len:
-            self.pem_queue_ptr = 0
-
-    def entity_stats_init(self):
-        self.max_sqrt_hp = int(np.sqrt(2500))
-        self.max_sqrt_en = int(np.sqrt(250))
-        self.one_hot_spacing = [232, 1, self.max_sqrt_hp, self.max_sqrt_en, 50, 50, 1, 10]
-        self.entity_col_ct = len(self.one_hot_spacing) + 2
-        self.one_hot_spacing_cumulative = [sum(self.one_hot_spacing[:i]) for i in range(len(self.one_hot_spacing))]
-        self.preprocessed_entity_col_ct = sum(self.one_hot_spacing)
-        self.entity_permutation_ct = 1
-        for spacing in self.one_hot_spacing:
-            self.entity_permutation_ct *= spacing + 1
-            
-
-"""
-Adapts the original Transformer positional encoding for fairly large (8192x8192) 2d positional input.
-Tested to balance complexity of function and representing nearby x,y points with near positional
-vectors, and far-apart x,y points with far positional vectors; the hope is that the function doesn't
-have to be precisely parametrically learned by the model since distance is a valuable metric.
+Adapts the original Transformer positional encoding for fairly large (8192x8192) 2d positional 
+input. Tested to balance complexity of function and representing nearby x,y points with near 
+positional vectors, and far-apart x,y points with far positional vectors; the hope is that the 
+function doesn't have to be precisely parametrically learned by the model, since distance is a 
+valuable metric.
 """
 def positional_encoding_vector(x, y, depth, w, h):
     # skipping very low minimum distance between vectors in small x, y
@@ -79,7 +36,7 @@ def positional_encoding_vector(x, y, depth, w, h):
 
 
 """
-Creates an array of 2d positional encoding vectors using positional_encoding_vector()
+Creates an array of positional encoding vectors from 2d input using positional_encoding_vector()
     @positions: list of 2d positions; variance is well preserved in the < 16,000 range
     @depth: depth (length) of the positional encoding vectors
     @w: width of the space (max x)
@@ -130,7 +87,13 @@ Used for tuning the encoder so that it has sufficient minimum distance between v
 vectors near in x, y have shorter distance, and to balance those outcomes with simplification of
 the encoding algorithm for easier learning.
 """
-def test_positional_encoding_array(test_type='visual', depth=256, width=8192, height=8192, xy_plane_ct=8):
+def test_positional_encoding_array(
+        test_type='visual', 
+        depth=256, 
+        width=8192, 
+        height=8192, 
+        xy_plane_ct=8
+    ):
     assert test_type in ['visual', 'distance', 'both']
     assert xy_plane_ct >= 4
     xy_plane_dim = 30
@@ -138,8 +101,12 @@ def test_positional_encoding_array(test_type='visual', depth=256, width=8192, he
     y_extremes = (0, height - xy_plane_dim, 0, height - xy_plane_dim)
     x_extremes = (0, width - xy_plane_dim, width - xy_plane_dim, 0)
     # the remaining planes are randomly selected
-    yrange_starts = [randint(xy_plane_dim, y_extremes[1] - xy_plane_dim) for _ in range(xy_plane_ct - 4)]
-    xrange_starts = [randint(xy_plane_dim, x_extremes[1] - xy_plane_dim) for _ in range(xy_plane_ct - 4)]
+    yrange_starts = [
+        randint(xy_plane_dim, y_extremes[1] - xy_plane_dim) for _ in range(xy_plane_ct - 4)
+    ]
+    xrange_starts = [
+        randint(xy_plane_dim, x_extremes[1] - xy_plane_dim) for _ in range(xy_plane_ct - 4)
+    ]
     yrange_starts.extend(y_extremes)
     xrange_starts.extend(x_extremes)
     yranges = [range(yrange_starts[i], yrange_starts[i] + xy_plane_dim) for i in range(xy_plane_ct)]
@@ -215,23 +182,30 @@ def test_positional_encoding_array(test_type='visual', depth=256, width=8192, he
         print(':2d positional encoder distance test:')
         print(':-----------------------------------:')
         print('Near (x, y) values:')
-        print(f'\tmin: {min_near_xy_dist:.9f}, max: {max_near_xy_dist:.9f}, mean: {mean_near_xy_dist:.9f}')
+        print(
+            f'\tmin: {min_near_xy_dist:.9f}, max: {max_near_xy_dist:.9f}, ' \
+            f'mean: {mean_near_xy_dist:.9f}'
+        )
         print('Random (x, y) values:')
-        print(f'\tmin: {min_rand_xy_dist:.9f}, max: {max_rand_xy_dist:.9f}, mean: {mean_rand_xy_dist:.9f}')
+        print(
+            f'\tmin: {min_rand_xy_dist:.9f}, max: {max_rand_xy_dist:.9f}, ' \
+            f'mean: {mean_rand_xy_dist:.9f}'
+        )
 
-    
-# 0: unit type      (int to one-hot max 233)
-# 1: owner          (int to binary one-hot) 
-# 2: health         (int -> one hot of sqrt(min(hp, max_bw_hp))) (max bw hp = 2500)
-# 3: energy         (int -> one hot of sqrt(min(en, max_bw_en))) (max bw en = 250)
-# 4: attack cd      (int -> one hot with maximum 50 (1 learn interval per 2 frames))
-# 5: spell cd       (int -> one hot with maximum 50 (1 learn interval per 2 frames))
-# 6: is burrowed    (int to binary one-hot)
-# 7: armor          (int -> one hot maximum 10)
-# 8: position x     (set aside for positional encoding)
-# 9: position y     (set aside for positional encoding)   
 
-def preprocessed_entities(entities, nn_width):
+"""
+ 0: unit type      (int -> one-hot max 233)
+ 1: owner          (int -> binary one-hot) 
+ 2: health         (int -> one hot of sqrt(min(hp, max_bw_hp))) (max bw hp = 2500)
+ 3: energy         (int -> one hot of sqrt(min(en, max_bw_en))) (max bw en = 250)
+ 4: attack cd      (int -> one hot with maximum 50 (1 learn interval per 2 frames))
+ 5: spell cd       (int -> one hot with maximum 50 (1 learn interval per 2 frames))
+ 6: is burrowed    (int -> binary one-hot)
+ 7: armor          (int -> one hot maximum 10)
+ 8: position x     (set aside for positional encoding)
+ 9: position y     (set aside for positional encoding)   
+"""
+def preprocess_entities(entities, nn_width=256):
     n = entities.shape[0]
     positions = entities[:, _cache.entity_col_ct-2:]
     entities = entities[:, 0:_cache.entity_col_ct-2]
@@ -255,17 +229,16 @@ def preprocessed_entities(entities, nn_width):
 
 """
 An attempt at creating my own static embedding using prime numbers to ensure
-uniqueness for each entity permutation. Appears to work alright!
+uniqueness for each entity permutation. Assumes entity data is preprocessed into
+concatenated one-hot vectors. Appears to work alright!
 """
 def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=False):
     in_cols = preprocessed_entities.shape[1]
     n = preprocessed_entities.shape[0]
     step_size = ceil(in_cols / encoder_layer_sz)
     init_step_size = step_size
-    # TODO: pickle
-    primes = np.array(list(primerange(0, 10000))[1:in_cols+1])
     embedded_entities = np.zeros((n, encoder_layer_sz))
-
+    primes = _cache.primes[1: in_cols+1]
     min_prime = primes[0]
     div_val = 1/(min_prime*0.9)
 
@@ -282,19 +255,20 @@ def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=Fals
             if remaining_embedded_cols * (step_size-1) >= remaining_preprocessed_cols:
                 step_size -= 1
         else:
-            embedded_entities[:,j] = preprocessed_entities[:,i] * primes[i]
+            embedded_entities[:,j] = preprocessed_entities[:,i] * primes[i] * div_val
         i += step_size
         j += 1
         remaining_embedded_cols -= 1
         remaining_preprocessed_cols -= step_size
+
     embedded_entities = np.log(embedded_entities, where=(embedded_entities>0))
     embedded_max = np.log(np.prod(primes[-init_step_size:]))
     embedded_entities /= embedded_max
 
     if show_plots:
         flattened = embedded_entities.flatten()
-        plt.title('embedded')
-        plt.hist(flattened, bins=50)
+        plt.title('embedded nonzero')
+        plt.hist(flattened[flattened > 0], bins=100)
         plt.show()
         plt.title('preprocessed')
         plt.imshow(preprocessed_entities, cmap='plasma')
@@ -305,7 +279,107 @@ def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=Fals
 
     return embedded_entities
 
+
+# --------------------------------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------------------ Map ---#
+# --------------------------------------------------------------------------------------------------#
+
+"""
+Squares the map by adding borders and scales it to be ready for the spatial encoder.
+"""
+def preprocess_map(_map, scale_to_dim=128, show_plots=False):
+    map_depth = _map.shape[0]
+    map_height = _map.shape[1]
+    map_width = _map.shape[2]
+    prescale_map_dim = map_height if map_height > map_width else map_width
+
+    # If the dimensions are unequal, make the map square by adding borders before scaling to make
+    # normal distance measures true. I don't know if this is important but it seems reasonable.
+    # TODO: MIGHT want scaled_map w x h to represent largest possible bw map w x h before adding
+    # more maps so that distance is consistent across maps
+    if map_width > map_height:
+        prescale_map = np.zeros((map_depth, prescale_map_dim, prescale_map_dim))
+        prescale_map[:, :map_height, :] = _map
+    elif map_height > map_width:
+        prescale_map = np.zeros((prescale_map_dim, prescale_map_dim))
+        prescale_map[:, :, :map_width] = _map
+    else:
+        prescale_map = map
+
+    scaled_map = [None for _ in range(map_depth)] 
+    for i in range(map_depth):
+        scaled_map[i] = cv2.resize(
+            prescale_map[i], (int(scale_to_dim), int(scale_to_dim)), interpolation=cv2.INTER_NEAREST
+        )
+    scaled_map = np.array(scaled_map)
+
+    if show_plots:
+        for i in range(map_depth):
+            plt.imshow(scaled_map[i])
+            plt.show()
     
+    return scaled_map
+
+
+# --------------------------------------------------------------------------------------------------#
+# -------------------------------------------------------------------------------------- General ---#
+# --------------------------------------------------------------------------------------------------#
+
+
+# object shared for caching 
+_cache = None
+"""
+pem = positional encoding memory
+"""
+class Cache:
+    
+    def __init__(self):
+        self.pem_init()
+        self.entity_stats_init()
+        self.primes_init()
+        
+    def pem_init(self):
+        self.pem_len = 10000
+        self.pem_queue = [
+            (-i, -i) for i in range(1, self.pem_len+1)
+        ]
+        self.pem = dict(zip(
+            self.pem_queue, 
+            [None for i in range(self.pem_len)]
+        ))
+        self.pem_queue_ptr = 0
+
+    def primes_init(self):
+        self.primes = pload(open('data/primes.bin', 'rb'), encoding='bytes')
+
+    def entity_stats_init(self):
+        self.max_sqrt_hp = int(np.sqrt(2500))
+        self.max_sqrt_en = int(np.sqrt(250))
+        self.one_hot_spacing = [232, 1, self.max_sqrt_hp, self.max_sqrt_en, 50, 50, 1, 10]
+        self.entity_col_ct = len(self.one_hot_spacing) + 2
+        self.one_hot_spacing_cumulative = [
+            sum(self.one_hot_spacing[:i]) for i in range(len(self.one_hot_spacing))
+        ]
+        self.preprocessed_entity_col_ct = sum(self.one_hot_spacing)
+        self.entity_permutation_ct = 1
+        for spacing in self.one_hot_spacing:
+            self.entity_permutation_ct *= spacing + 1
+
+    def pem_cached(self, xy):
+        try:
+            return self.pem[xy]
+        except:
+            return None
+
+    def pem_add(self, xy, vec):
+        key = self.pem_queue[self.pem_queue_ptr]
+        self.pem.pop(key)
+        self.pem_queue[self.pem_queue_ptr] = xy
+        self.pem[xy] = vec
+        self.pem_queue_ptr += 1
+        if self.pem_queue_ptr >= self.pem_len:
+            self.pem_queue_ptr = 0
+
 
 def stats(item):
     if item == 'entity_permutation_ct':
@@ -320,6 +394,6 @@ def init_cache():
 
 
 if __name__ == '__main__':
-    init_cache()
-    # test_positional_encoding_array('distance', depth=128, xy_plane_ct=100)
+    # init_cache()
+    # test_positional_encoding_array('distance', depth=256, xy_plane_ct=100)
     pass
