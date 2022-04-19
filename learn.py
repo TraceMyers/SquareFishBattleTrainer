@@ -20,10 +20,13 @@ def scratch():
     entity_encodings, spatial_entity_encodings, encoded_entities = \
         entity_encoder.forward(embedded_entities, positional_encoding)
 
+    plt.imshow(entity_encodings.detach().numpy(), cmap='plasma')
+    plt.show()
+    plt.imshow(spatial_entity_encodings.detach().numpy(), cmap='plasma')
+    plt.show()
     # raw_map = load_map()
     # preprocessed_map = preprocess_map(raw_map)
     
-
 
 if __name__ == '__main__':
     init_cache()
