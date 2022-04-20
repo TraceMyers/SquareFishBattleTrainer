@@ -22,7 +22,8 @@ function doesn't have to be precisely parametrically learned by the model, since
 valuable metric.
 """
 def positional_encoding_vector(x, y, depth, w, h):
-    # skipping very low minimum distance between vectors in small x, y
+    # skipping very low minimum manhattan distance between vectors in small x, y to avoid euclidian
+    # distance going to 0 due to insufficient float precision
     skip_distance = 500
     x += skip_distance
     y += skip_distance
@@ -287,14 +288,24 @@ def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=Fals
 
 """
 Squares the map by adding borders and scales it to be ready for the spatial encoder.
+Stacks convolved entity encodings into multiple layers.
 """
-def preprocess_map(_map, spatial_entity_encodings, entity_positions, scale_to_dim=128, show_plots=False):
+def preprocess_map(
+    _map, 
+    spatial_entity_encodings, 
+    entity_positions, 
+    scale_to_dim=128, 
+    spatial_entity_encoding_sz=8, 
+    max_entity_stack_size=4, 
+    show_plots=False
+):
     map_depth = _map.shape[0]
     map_height = _map.shape[1]
     map_width = _map.shape[2]
     prescale_map_dim = map_height if map_height > map_width else map_width
     entity_tilepositions = entity_positions // 32
-
+    scaled_map_depth = map_depth + spatial_entity_encoding_sz * max_entity_stack_size
+    
     # If the dimensions are unequal, make the map square by adding borders before scaling to make
     # normal distance measures true. I don't know if this is important but it seems reasonable.
     # TODO: MIGHT want scaled_map w x h to represent largest possible bw map w x h before adding
@@ -306,17 +317,38 @@ def preprocess_map(_map, spatial_entity_encodings, entity_positions, scale_to_di
         prescale_map = np.zeros((prescale_map_dim, prescale_map_dim))
         prescale_map[:, :, :map_width] = _map
     else:
-        prescale_map = map
+        prescale_map = _map
+    scaled_map = np.zeros((
+        scaled_map_depth,
+        scale_to_dim,
+        scale_to_dim
+    ))
 
-    scaled_map = [None for _ in range(map_depth)] 
     for i in range(map_depth):
         scaled_map[i] = cv2.resize(
             prescale_map[i], (int(scale_to_dim), int(scale_to_dim)), interpolation=cv2.INTER_NEAREST
         )
-    scaled_map = np.array(scaled_map)
+
+    # stacking entity encodings into their respective positions on the map
+    entity_scale = scale_to_dim / prescale_map_dim
+    entity_tilepositions = np.round(entity_tilepositions * entity_scale).astype(np.int32)
+    stack_sizes = [[0 for _ in range(scale_to_dim)] for j in range(scale_to_dim)]
+    for i in range(spatial_entity_encodings.shape[0]):
+        se_enc = spatial_entity_encodings[i]
+        tp = entity_tilepositions[i]
+        x, y = tp[1], tp[0]
+        stack_size = stack_sizes[x][y]
+        if stack_size < max_entity_stack_size:
+            stack_start = map_depth + stack_size * spatial_entity_encoding_sz
+            scaled_map[stack_start:stack_start+spatial_entity_encoding_sz, x, y] = se_enc
+            stack_sizes[x][y] += 1
+        else:
+            print(
+                "processing::map_preprocessing() entity stack size overflow. Entity encoding lost."
+            )
 
     if show_plots:
-        for i in range(map_depth):
+        for i in range(map_depth + spatial_entity_encoding_sz):
             plt.imshow(scaled_map[i])
             plt.show()
     
@@ -396,6 +428,6 @@ def init_cache():
 
 
 if __name__ == '__main__':
-    # init_cache()
-    # test_positional_encoding_array('distance', depth=256, xy_plane_ct=100)
+    init_cache()
+    test_positional_encoding_array('distance', depth=256, xy_plane_ct=100)
     pass
