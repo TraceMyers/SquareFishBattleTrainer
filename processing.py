@@ -10,6 +10,24 @@ import cv2
 
 
 # --------------------------------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------------- Timestep ---#
+# --------------------------------------------------------------------------------------------------#
+
+
+"""
+For now, time step is the only scalar feature, so the only scalar encoding needed is the positional
+encoding of the timestep.
+"""
+def transformer_positional_encoding(time_step, depth):
+    vector = [0 for i in range(depth)]
+    for k in range(depth // 2):
+        step_val = time_step / 10000**(2 * k / depth)
+        vector[2*k] = np.sin(step_val)
+        vector[2*k+1] = np.cos(step_val)
+    return np.array(vector)
+
+
+# --------------------------------------------------------------------------------------------------#
 # ------------------------------------------------------------------------------------- Entities ---#
 # --------------------------------------------------------------------------------------------------#
 
@@ -210,8 +228,8 @@ def preprocess_entities(entities, nn_width=256):
     n = entities.shape[0]
     positions = entities[:, _cache.entity_col_ct-2:]
     entities = entities[:, 0:_cache.entity_col_ct-2]
-    entities[:, 2] = (np.sqrt(entities[:, 2])).astype(np.int32)
-    entities[:, 3] = (np.sqrt(entities[:, 3])).astype(np.int32)
+    entities[:, 2] = (np.sqrt(entities[:, 2].astype(np.float32))).astype(np.int32)
+    entities[:, 3] = (np.sqrt(entities[:, 3].astype(np.float32))).astype(np.int32)
     entities[:, 4] = entities[:, 4] // 2
     entities[:, 5] = entities[:, 5] // 2
     entities -= 1
@@ -314,7 +332,7 @@ def preprocess_map(
         prescale_map = np.zeros((map_depth, prescale_map_dim, prescale_map_dim))
         prescale_map[:, :map_height, :] = _map
     elif map_height > map_width:
-        prescale_map = np.zeros((prescale_map_dim, prescale_map_dim))
+        prescale_map = np.zeros((map_depth, prescale_map_dim, prescale_map_dim))
         prescale_map[:, :, :map_width] = _map
     else:
         prescale_map = _map
@@ -331,8 +349,8 @@ def preprocess_map(
 
     # stacking entity encodings into their respective positions on the map
     entity_scale = scale_to_dim / prescale_map_dim
-    entity_tilepositions = np.round(entity_tilepositions * entity_scale).astype(np.int32)
-    stack_sizes = [[0 for _ in range(scale_to_dim)] for j in range(scale_to_dim)]
+    entity_tilepositions = (entity_tilepositions * entity_scale).astype(np.int32)
+    stack_sizes = [[0 for _a in range(scale_to_dim)] for _b in range(scale_to_dim)]
     for i in range(spatial_entity_encodings.shape[0]):
         se_enc = spatial_entity_encodings[i]
         tp = entity_tilepositions[i]

@@ -174,6 +174,7 @@ class SpatialEncoder(nn.Module):
         res_block_input = self.down_sample(flat_map)
 
         map_skips = []
+        map_skips.append(res_block_input)
         for i in range(self.res_block_ct):
             res_block_input = self.res_blocks[i](res_block_input)
             map_skips.append(res_block_input)
