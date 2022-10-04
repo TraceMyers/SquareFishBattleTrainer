@@ -1,3 +1,6 @@
 __pycache__/*
+data/*
+imgs/*
+models/*
 Triggers.trg
 abattletrain_comments.txt
