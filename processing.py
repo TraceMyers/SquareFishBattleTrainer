@@ -2,10 +2,11 @@ from tkinter import W
 import numpy as np
 from matplotlib import pyplot as plt
 from random import randint, sample as randsample, choice
-from load import load_entities, load_map
+from load import load_entities, load_map, load_file
 from math import ceil
 from sympy import primerange
 from pickle import load as pload, dump as pdump
+from torch import sum as tsum
 import cv2
 
 
@@ -232,7 +233,7 @@ def preprocess_entities(entities, nn_width=256):
     entities[:, 3] = (np.sqrt(entities[:, 3].astype(np.float32))).astype(np.int32)
     entities[:, 4] = entities[:, 4] // 2
     entities[:, 5] = entities[:, 5] // 2
-    entities -= 1
+    entities[1:] -= 1
 
     preprocessed = np.zeros((n, _cache.preprocessed_entity_col_ct), dtype=np.int32)
     for i in range(n):
@@ -242,7 +243,10 @@ def preprocess_entities(entities, nn_width=256):
             if entity_val < 0:
                 continue
             spacing = _cache.one_hot_spacing_cumulative[j]
-            preprocessed[i, spacing + entity_val] = 1
+            try:
+                preprocessed[i, spacing + entity_val] = 1
+            except:
+                return None, None, None
     return preprocessed, positional_encoding_array(positions, nn_width, 8192, 8192), positions
 
 
@@ -300,6 +304,240 @@ def prime_embedding(preprocessed_entities, encoder_layer_sz=256, show_plots=Fals
 
 
 # --------------------------------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------------- Orders -----#
+# --------------------------------------------------------------------------------------------------#
+
+# considered types:
+# 35 - larva
+# 37 - zergling 
+# 38 - hydralisk
+# 39 - ultralisk
+# 41 - drone
+# 42 - overlord
+# 43 - mutalisk
+# 44 - guardian
+# 45 - queen
+# 46 - defiler
+# 47 - scourge
+# 62 - devourer
+# 103 - lurker
+def get_action_mask(raw_entities, ACTION_CT):
+    self_units_mask = raw_entities[:, 1] == -1 # everything had 1 subtracted in preprocessing
+    self_units = raw_entities[self_units_mask] + 1
+    types = set(self_units[:, 0])
+    other_units_visible = raw_entities.shape[0] > self_units.shape[0]
+
+    action_mask = np.ones(ACTION_CT)
+    action_mask[11:] = 0
+    action_mask[1] = other_units_visible
+    
+    attack_types = {
+        37, 38, 39, 41, 43, 44, 47, 62
+    }
+    attacking_possible = False
+    for utype in types:
+        if utype in attack_types:
+            attacking_possible = True
+            break
+    if not attacking_possible:
+        action_mask[0] = 0
+        action_mask[1] = 0
+    
+    if 103 in types:
+        lurkers_mask = self_units[:, 0] == 103
+        lurkers = self_units[lurkers_mask]
+        burrowed_lurker_ct = np.sum(lurkers[:, 6])
+        if burrowed_lurker_ct == lurkers.shape[0]:
+            action_mask[2] = 0
+        elif burrowed_lurker_ct == 0:
+            action_mask[9] = 0
+    else:
+        action_mask[2] = 0
+        action_mask[9] = 0
+
+    if 46 in types:
+        defilers_mask = self_units[:, 0] == 46
+        defilers = self_units[defilers_mask]
+        defiler_ct = defilers.shape[0]
+        cooling_down_ct = np.sum(defilers[:,5] > 0)
+        if cooling_down_ct < defiler_ct:
+            plague_energy_ct = np.sum(defilers[:,3] >= 12)
+            if plague_energy_ct == 0:
+                action_mask[5] = 0
+            swarm_energy_ct = np.sum(defilers[:,3] >= 10)
+            if swarm_energy_ct == 0:
+                action_mask[4] = 0
+        else:
+            action_mask[3] = 0
+    else:
+        action_mask[3] = 0
+        action_mask[4] = 0
+        action_mask[5] = 0
+    
+    return action_mask
+
+
+def get_unit_type_action_mask(action_one_hot):
+    action_one_hot = action_one_hot.astype(np.int32)
+    if np.sum(action_one_hot) == 0:
+        return _cache.none_mask
+    if np.any(action_one_hot & _cache.attack_move) or np.any(action_one_hot & _cache.attack_unit):
+        return _cache.attack_mask
+    if np.any(action_one_hot & _cache.burrowing) or np.any(action_one_hot & _cache.unburrowing):
+        return _cache.burrow_mask
+    if np.any(action_one_hot & _cache.defiler_combined):
+        return _cache.defiler_mask
+    return _cache.other_mask
+
+
+def get_unit_selection_mask(unit_ct, self_unit_ct):
+    return np.array([1 if i < self_unit_ct else 0 for i in range(unit_ct)])
+
+
+order_dict = {
+    'attack_move': (14, 0), 'attack_unit': (10, 1), 'burrowing': (116, 2),
+    'consume': (145, 3), 'dark_swarm': (119, 4), 'plague': (144, 5),
+    'hold_position': (107, 6), 'move': (6, 7), 'patrol': (152, 8),
+    'unburrowing': (118, 9), 'stop': (1, 10), 'irradiate': (143, 11),
+    'emp': (122, 12), 'defense_matrix': (141, 13), 'unsieging': (99, 14),
+    'sieging': (98, 15), 'mine': (20, 16)
+}
+independent_orders = [
+    order_dict['burrowing'][1],
+    order_dict['hold_position'][1],
+    order_dict['unburrowing'][1],
+    order_dict['stop'][1],
+    order_dict['unsieging'][1],
+    order_dict['sieging'][1]
+]
+positional_orders = [
+    order_dict['attack_move'][1],
+    order_dict['dark_swarm'][1],
+    order_dict['emp'][1],
+    order_dict['move'][1],
+    order_dict['patrol'][1],
+    order_dict['mine'][1],
+]
+targeted_orders = [
+    order_dict['attack_unit'][1],
+    order_dict['consume'][1],
+    order_dict['defense_matrix'][1],
+    order_dict['irradiate'][1],
+    order_dict['plague'][1]
+]
+
+
+def get_order_type(order_one_hot):
+    order = np.argmax(order_one_hot.cpu().detach().numpy())
+    if order in independent_orders:
+        return 0
+    if order in targeted_orders:
+        return 1
+    if order in positional_orders:
+        return 2
+    else:
+        return -1
+    
+
+def get_supervised_order(raw_orders, self_units_ct, ACTION_CT, walkability_mask_dim=128):
+    self_orders = raw_orders[:, :self_units_ct]
+    new_orders_mask = self_orders[:, 0] != 0
+    new_orders = self_orders[new_orders_mask]
+
+    order_type = -1
+    order_one_hot = np.zeros(ACTION_CT)
+    actor_one_hot = np.zeros(self_orders.shape[0])
+    target_one_hot = np.zeros(raw_orders.shape[0])
+    tilepos_one_hot = np.zeros((walkability_mask_dim, walkability_mask_dim))
+    order_encodings = [
+        order_one_hot,
+        actor_one_hot,
+        target_one_hot,
+        tilepos_one_hot,
+        order_type
+    ]
+
+    if new_orders.shape[0] == 0:
+        return order_encodings
+    order_col = self_orders[:, 0]
+    for val in order_dict.values():
+        bwapi_val = val[0]
+        model_val = val[1]
+        mask = order_col == bwapi_val
+        self_orders[mask, 0] = model_val
+
+    unique, counts = np.unique(order_col[order_col != 0], return_counts=True)
+    if len(counts) == 0:
+        return order_encodings
+    selected_order = unique[np.argmax(counts)]
+    avg_scaled_tilepos_y = 0
+    avg_scaled_tilepos_x = 0
+    # TODO: debug:     
+    # > order_one_hot[selected_order] = 1
+    # > IndexError: index 189 is out of bounds for axis 0 with size 17
+    try:
+        order_one_hot[selected_order] = 1
+    except:
+        return order_encodings
+
+    if selected_order in independent_orders:
+        actor_one_hot[order_col == selected_order] = 1
+        order_type = 0
+    elif selected_order in targeted_orders:
+        target_col = self_orders[:, 3]
+        unique, counts = np.unique(target_col[target_col != 0], return_counts=True)
+        selected_target = unique[np.argmax(counts)] 
+        target_one_hot[selected_target - 1] = 1
+        actor_one_hot[(order_col == selected_order) & (target_col == selected_target)] = 1
+        order_type = 1
+    else:
+        grouping_dist = 96
+        xy_cols = self_orders[:, 1:3]
+        move_groups = []
+        group_sizes = []
+        for i in range(xy_cols.shape[0]):
+            if order_col[i] == selected_order:
+                move_groups.append([i, ])
+                group_sizes.append(1)
+        largest_group_i = 0
+        largest_group_ct = 1
+        if len(move_groups) > 1:
+            _end = len(move_groups)
+            for i in range(_end - 1):
+                if len(move_groups[i]) > 0:
+                    standard_row = move_groups[i][0]
+                    standard_pos = xy_cols[standard_row, :]
+                    for j in range(i + 1, _end):
+                        if len(move_groups[j]) > 0:
+                            compare_row = move_groups[j][0]
+                            compare_pos = xy_cols[compare_row, :]
+                            distance = np.sqrt(
+                                (standard_pos[0] - compare_pos[0])**2 + \
+                                (standard_pos[1] - compare_pos[1])**2
+                            )
+                            if distance < grouping_dist:
+                                move_groups[i].append(compare_row)
+                                move_groups[j].clear()
+                                group_sizes[i] += 1
+                                if group_sizes[i] > largest_group_ct:
+                                    largest_group_ct = group_sizes[i]
+                                    largest_group_i = i;
+        largest_move_group = move_groups[largest_group_i]
+        sum_x = 0
+        sum_y = 0
+        for i in largest_move_group:
+            actor_one_hot[i] = 1
+            sum_x += xy_cols[i, 0]
+            sum_y += xy_cols[i, 1]
+        avg_scaled_tilepos_x = int(sum_x / (largest_group_ct * 32) * _cache.entity_scale)
+        avg_scaled_tilepos_y = int(sum_y / (largest_group_ct * 32) * _cache.entity_scale)
+        tilepos_one_hot[avg_scaled_tilepos_y, avg_scaled_tilepos_x] = 1
+        order_type = 2
+        
+    return [order_one_hot, actor_one_hot, target_one_hot, tilepos_one_hot, order_type, (avg_scaled_tilepos_y, avg_scaled_tilepos_x)]
+
+
+# --------------------------------------------------------------------------------------------------#
 # ------------------------------------------------------------------------------------------ Map ---#
 # --------------------------------------------------------------------------------------------------#
 
@@ -348,29 +586,38 @@ def preprocess_map(
         )
 
     # stacking entity encodings into their respective positions on the map
-    entity_scale = scale_to_dim / prescale_map_dim
-    entity_tilepositions = (entity_tilepositions * entity_scale).astype(np.int32)
+    _cache.entity_scale = scale_to_dim / prescale_map_dim
+    entity_tilepositions = (entity_tilepositions * _cache.entity_scale).astype(np.int32)
     stack_sizes = [[0 for _a in range(scale_to_dim)] for _b in range(scale_to_dim)]
     for i in range(spatial_entity_encodings.shape[0]):
         se_enc = spatial_entity_encodings[i]
         tp = entity_tilepositions[i]
-        x, y = tp[1], tp[0]
-        stack_size = stack_sizes[x][y]
+        x, y = tp[0], tp[1]
+        try:
+            stack_size = stack_sizes[y][x]
+        except:
+            with open('models/supervised_errors.txt', 'a') as f:
+                f.write(
+                    f'processing::preprocess_map(): bad unit tileposition ({x}, {y})' \
+                    f'with scale_to_dim={scale_to_dim}\n'
+                )
+            continue
         if stack_size < max_entity_stack_size:
             stack_start = map_depth + stack_size * spatial_entity_encoding_sz
-            scaled_map[stack_start:stack_start+spatial_entity_encoding_sz, x, y] = se_enc
-            stack_sizes[x][y] += 1
+            scaled_map[stack_start:stack_start+spatial_entity_encoding_sz, y, x] = se_enc
+            stack_sizes[y][x] += 1
         else:
             print(
                 "processing::map_preprocessing() entity stack size overflow. Entity encoding lost."
             )
 
     if show_plots:
-        for i in range(map_depth + spatial_entity_encoding_sz):
+        for i in range(map_depth+spatial_entity_encoding_sz):
             plt.imshow(scaled_map[i])
             plt.show()
     
-    return scaled_map
+    walkability_mask = scaled_map[0]
+    return scaled_map, walkability_mask
 
 
 # --------------------------------------------------------------------------------------------------#
@@ -389,7 +636,56 @@ class Cache:
         self.pem_init()
         self.entity_stats_init()
         self.primes_init()
-        
+        self.entity_scale = None
+        self.masks_init()
+
+    def masks_init(self):
+        attack_types = [37, 38, 39, 41, 43, 44, 47, 62]
+        self.attack_mask = np.array([1 if i in attack_types else 0 for i in range(233)]).astype(np.int32)
+        burrow_types = [103,]
+        self.burrow_mask = np.array([1 if i in burrow_types else 0 for i in range(233)]).astype(np.int32)
+        defiler_type = [46, ]
+        self.defiler_mask = np.array([1 if i in defiler_type else 0 for i in range(233)]).astype(np.int32)
+        other_types = [35,37,38,39,41,42,43,44,45,46,47,62,103]
+        self.other_mask = np.array([1 if i in other_types else 0 for i in range(233)]).astype(np.int32)
+        self.none_mask = np.zeros(233)
+
+        self.attack_move = np.zeros(17).astype(np.int32)
+        self.attack_move[0] = 1
+        self.attack_unit = np.zeros(17).astype(np.int32)
+        self.attack_unit [1] = 1
+        self.burrowing = np.zeros(17).astype(np.int32)
+        self.burrowing[2] = 1
+        self.consume = np.zeros(17).astype(np.int32)
+        self.consume[3] = 1
+        self.dark_swarm = np.zeros(17).astype(np.int32)
+        self.dark_swarm[4] = 1
+        self.plague = np.zeros(17).astype(np.int32)
+        self.plague[5] = 1
+        self.hold_position = np.zeros(17).astype(np.int32)
+        self.hold_position[6] = 1
+        self.move = np.zeros(17).astype(np.int32)
+        self.move[7] = 1
+        self.patrol = np.zeros(17).astype(np.int32)
+        self.patrol[8] = 1
+        self.unburrowing = np.zeros(17).astype(np.int32)
+        self.unburrowing[9] = 1
+        self.stop = np.zeros(17).astype(np.int32)
+        self.stop[10] = 1
+        self.irradiate = np.zeros(17).astype(np.int32)
+        self.irradiate[11] = 1
+        self.emp = np.zeros(17).astype(np.int32)
+        self.emp[12] = 1
+        self.defense_matrix = np.zeros(17).astype(np.int32)
+        self.defense_matrix[13] = 1
+        self.unsieging = np.zeros(17).astype(np.int32)
+        self.unsieging[14] = 1
+        self.sieging = np.zeros(17).astype(np.int32)
+        self.sieging[15] = 1
+        self.mine = np.zeros(17).astype(np.int32)
+        self.mine[16] = 1
+        self.defiler_combined = self.plague & self.dark_swarm & self.consume
+
     def pem_init(self):
         self.pem_len = 10000
         self.pem_queue = [
@@ -407,7 +703,7 @@ class Cache:
     def entity_stats_init(self):
         self.max_sqrt_hp = int(np.sqrt(2500))
         self.max_sqrt_en = int(np.sqrt(250))
-        self.one_hot_spacing = [232, 1, self.max_sqrt_hp, self.max_sqrt_en, 50, 50, 1, 10]
+        self.one_hot_spacing = [233, 1, self.max_sqrt_hp, self.max_sqrt_en, 50, 50, 1, 11]
         self.entity_col_ct = len(self.one_hot_spacing) + 2
         self.one_hot_spacing_cumulative = [
             sum(self.one_hot_spacing[:i]) for i in range(len(self.one_hot_spacing))
@@ -431,6 +727,20 @@ class Cache:
         self.pem_queue_ptr += 1
         if self.pem_queue_ptr >= self.pem_len:
             self.pem_queue_ptr = 0
+
+
+"""
+The data files can take a while to load. Pickle a single file's worth of data and make it available 
+quickly. This is useful for messing with model parameters.
+"""
+def pickle_file(file_no=0):
+    file_data = load_file(file_no)
+    if file_data is not None:
+        with open('data/pickled_data.bin', 'wb') as f:
+            pdump(file_data, f)
+        print(f'learn::pickle_file(): file [{file_no}] pickled.')
+    else:
+        print(f'learn::pickle_file(): bad data file [{file_no}]. not pickling.')
 
 
 def stats(item):

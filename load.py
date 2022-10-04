@@ -16,6 +16,7 @@ ORDER_VALUE_CT = 4
 
 
 def load_file(file_no=0):
+    print("load::load_file(): working...")
     raw_entities = load_entities(file_no)
     if raw_entities == None:
         print(f'load::load_file(): file {file_no} error - no entities read. skipping.')
@@ -43,6 +44,7 @@ def load_file(file_no=0):
         print(f'load::load_file(): file {file_no} error: unequal frame counts. skipping.')
         return None
     
+    print("file loaded!")
     return (raw_entities, orders, raw_map)
 
 
@@ -150,7 +152,7 @@ def load_map(file_no=0, test_map=False, visualize=False):
                     frame[2][y][x] = (unpacked_map_byte & terran_units_mask) >> 5
                     cur_index += 1
             cur_frame += 1
-            frames.append(frame)
+            frames.append(np.copy(frame))
         return walkability, np.array(frames)
         
 
